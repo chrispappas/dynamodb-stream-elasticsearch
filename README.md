@@ -70,8 +70,19 @@ Upload Lambda to AWS and _star_ this repository if it works as expected!!
 To run tests locally you need to have ElasticSearch docker container. Simply type:
 
 ```bash
-docker run -i -p 9200:9200 --name my_elastic -p 9300:9300 -e "discovery.type=single-node" elasticsearch
+docker run --rm -i \
+    -p 9200:9200 \
+    -e "discovery.type=single-node" \
+    --name dynamodb-stream-elasticsearch_test \
+    docker.elastic.co/elasticsearch/elasticsearch:7.4.0
 ```
+
+You can override the default ES_ENDPOINT (`http://localhost:9200`), ES_TYPE (`_doc`), and ES_INDEX (`test`) values by passing in environment vars when running the tests.
+
+```bash
+ES_ENDPOINT=https://user:pass@your-real-es.host.domain:443/path ES_INDEX=foobar npm run test
+``` 
+
 If you want to commit changes, make sure if follow these rules:
 1. All code changes should go with a proper integration test;
 2. Code should follow [Javascript Standard Guideline](https://standardjs.com/);
@@ -85,6 +96,7 @@ If you want to commit changes, make sure if follow these rules:
 
 * [matrus2](https://github.com/matrus2)
 * [cdelgadob](https://github.com/cdelgadob)
+* [chrispappas](https://github.com/chrispappas)
 
 ## License
 

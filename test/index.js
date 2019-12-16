@@ -9,9 +9,9 @@ const { removeEventData } = require('../src/utils/index')
 const getTableNameFromARN = require('../src/utils/table-name-from-arn')
 
 const converter = AWS.DynamoDB.Converter.unmarshall
-const INDEX = 'test'
-const TYPE = 'test1'
-const ES_ENDPOINT = 'localhost:9200'
+const ES_INDEX = process.env.ES_INDEX || 'test'
+const ES_TYPE = process.env.ES_TYPE || '_doc'
+const ES_ENDPOINT = process.env.ES_ENDPOINT || 'http://localhost:9200'
 
 async function assertThrowsAsync (fn, regExp) {
   let f = () => {}
@@ -25,14 +25,14 @@ async function assertThrowsAsync (fn, regExp) {
 }
 
 // 1. run a docker container
-// docker run -i -p 9200:9200 --name my_elastic -p 9300:9300 -e "discovery.type=single-node" elasticsearch:7.2.0
+// docker run --rm -i --name dynamodb-stream-elasticsearch_test -p 9200:9200 -e "discovery.type=single-node" elasticsearch:7.4.0
 describe('Test stream events', () => {
   let es
 
   beforeEach(async () => {
-    es = await elastic(`http://${ES_ENDPOINT}`, true)
+    es = await elastic(ES_ENDPOINT, true)
     const promiseArray = sampleData.map(
-      data => es.index({ index: INDEX, type: TYPE, id: data.url, body: data }))
+      data => es.index({ index: ES_INDEX, type: ES_TYPE, id: data.url, body: data }))
     await Promise.all(promiseArray).catch(e => { console.log(e) })
   })
 
@@ -42,18 +42,18 @@ describe('Test stream events', () => {
 
   it('MODIFY: should modify existing item', async () => {
     console.log('MODIFY')
-    await pushStream({ event: modifyEvent, index: INDEX, type: TYPE, endpoint: `http://${ES_ENDPOINT}`, testMode: true })
+    await pushStream({ event: modifyEvent, index: ES_INDEX, type: ES_TYPE, endpoint: ES_ENDPOINT })
     const keys = converter(modifyEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     const data = removeEventData(converter(modifyEvent.Records[0].dynamodb.NewImage))
     assert.deepEqual(data, body._source)
   })
 
   it('REMOVE: should delete existing item', async () => {
-    await pushStream({ event: removeEvent, index: INDEX, type: TYPE, endpoint: `http://${ES_ENDPOINT}`, testMode: true })
+    await pushStream({ event: removeEvent, index: ES_INDEX, type: ES_TYPE, endpoint: ES_ENDPOINT })
     const keys = converter(removeEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isFalse(body.found)
   })
@@ -61,17 +61,17 @@ describe('Test stream events', () => {
   it('REMOVE: should not delete if item doen\'t exists', async () => {
     const event = removeEvent
     event.Records[0].dynamodb.Keys.url.S = 'something-which-doesnt-exists'
-    await pushStream({ event, index: INDEX, type: TYPE, endpoint: `http://${ES_ENDPOINT}`, testMode: true })
+    await pushStream({ event, index: ES_INDEX, type: ES_TYPE, endpoint: ES_ENDPOINT })
     const keys = converter(removeEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isFalse(body.found)
   })
 
   it('INSERT: should insert new item', async () => {
-    await pushStream({ event: insertEvent, index: INDEX, type: TYPE, endpoint: `http://${ES_ENDPOINT}`, testMode: true })
+    await pushStream({ event: insertEvent, index: ES_INDEX, type: ES_TYPE, endpoint: ES_ENDPOINT })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     const data = removeEventData(converter(insertEvent.Records[0].dynamodb.NewImage))
@@ -81,14 +81,13 @@ describe('Test stream events', () => {
   it('INSERT: should insert new item when refresh false', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      refresh: false,
-      testMode: true
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
+      refresh: false
     })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     const data = removeEventData(converter(insertEvent.Records[0].dynamodb.NewImage))
@@ -96,10 +95,10 @@ describe('Test stream events', () => {
   })
 
   it('INSERT: should insert new item based on ARN values', async () => {
-    await pushStream({ event: insertEvent, endpoint: `http://${ES_ENDPOINT}`, testMode: true })
+    await pushStream({ event: insertEvent, endpoint: ES_ENDPOINT })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
     const arnKey = getTableNameFromARN(insertEvent.Records[0].eventSourceARN)
-    const result = await fetch(`http://${ES_ENDPOINT}/${arnKey}/${arnKey}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${arnKey}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     const data = removeEventData(converter(insertEvent.Records[0].dynamodb.NewImage))
@@ -109,14 +108,13 @@ describe('Test stream events', () => {
   it('INSERT: should insert new item with new field by transform function', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       transformFunction: insertFullAddress
     })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     assert.property(body._source, 'full_address')
@@ -125,14 +123,13 @@ describe('Test stream events', () => {
   it('INSERT: should insert new item with new field from transform promise func', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       transformFunction: transformPromise(true)
     })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     assert.property(body._source, 'foo')
@@ -142,14 +139,13 @@ describe('Test stream events', () => {
   it('INSERT: should insert new item with new field from transform promise func', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       transformFunction: transformPromiseTimeout(true)
     })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     assert.property(body._source, 'foo')
@@ -159,10 +155,9 @@ describe('Test stream events', () => {
   it('INSERT: should throw if promise rejected', async () => {
     const simpleData = {
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       transformFunction: transformPromise(false)
     }
     await assertThrowsAsync(async () => pushStream(simpleData), 'Your error')
@@ -171,14 +166,13 @@ describe('Test stream events', () => {
   it('INSERT: should insert new item without new field', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       transformFunction: undefined
     })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     const data = removeEventData(converter(insertEvent.Records[0].dynamodb.NewImage))
@@ -186,20 +180,20 @@ describe('Test stream events', () => {
   })
 
   it('Multiple events: insert, remove, modify', async () => {
-    await pushStream({ event: multipleEvents, index: INDEX, type: TYPE, endpoint: `http://${ES_ENDPOINT}`, testMode: true })
+    await pushStream({ event: multipleEvents, index: ES_INDEX, type: ES_TYPE, endpoint: ES_ENDPOINT })
     const removed = converter(multipleEvents.Records[2].dynamodb.Keys).url
     const inserted = converter(multipleEvents.Records[0].dynamodb.Keys).url
     const changed = converter(multipleEvents.Records[1].dynamodb.Keys).url
     // REMOVED
-    let result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${removed}`)
+    let result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${removed}`)
     let body = await result.json()
     assert.isFalse(body.found)
     // INSERTED
-    result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${inserted}`)
+    result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${inserted}`)
     body = await result.json()
     assert.isTrue(body.found)
     // CHANGED
-    result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${changed}`)
+    result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${changed}`)
     body = await result.json()
     const data = removeEventData(converter(multipleEvents.Records[1].dynamodb.NewImage))
     assert.deepEqual(data, body._source)
@@ -208,25 +202,24 @@ describe('Test stream events', () => {
   it('Multiple events: insert, remove, modify with refresh false', async () => {
     await pushStream({
       event: multipleEvents,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       refresh: false
     })
     const removed = converter(multipleEvents.Records[2].dynamodb.Keys).url
     const inserted = converter(multipleEvents.Records[0].dynamodb.Keys).url
     const changed = converter(multipleEvents.Records[1].dynamodb.Keys).url
     // REMOVED
-    let result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${removed}`)
+    let result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${removed}`)
     let body = await result.json()
     assert.isFalse(body.found)
     // INSERTED
-    result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${inserted}`)
+    result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${inserted}`)
     body = await result.json()
     assert.isTrue(body.found)
     // CHANGED
-    result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${changed}`)
+    result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${changed}`)
     body = await result.json()
     const data = removeEventData(converter(multipleEvents.Records[1].dynamodb.NewImage))
     assert.deepEqual(data, body._source)
@@ -238,8 +231,7 @@ describe('Test stream events', () => {
       type: 'test1',
       body: { test: 'test', myvalue: { 1: 'test' } },
       id: '12',
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true
+      endpoint: ES_ENDPOINT
     }
     await assertThrowsAsync(async () => pushStream(simpleData), 'Please provide correct value for index')
   })
@@ -250,8 +242,7 @@ describe('Test stream events', () => {
       type: 1,
       body: { test: 'test', myvalue: { 1: 'test' } },
       id: '12',
-      endpoint: `http://${ES_ENDPOINT}`,
-      testMode: true
+      endpoint: ES_ENDPOINT
     }
     await assertThrowsAsync(async () => pushStream(simpleData), 'Please provide correct value for type')
   })
@@ -261,8 +252,7 @@ describe('Test stream events', () => {
       index: '12',
       type: 'test1',
       body: { test: 'test', myvalue: { 1: 'test' } },
-      id: '12',
-      testMode: true
+      id: '12'
     }
     await assertThrowsAsync(async () => pushStream(simpleData), 'Please provide correct value for endpoint')
   })
@@ -273,9 +263,8 @@ describe('Test stream events', () => {
       type: 'asd',
       body: { test: 'test', myvalue: { 1: 'test' } },
       id: '12',
-      endpoint: `http://${ES_ENDPOINT}`,
-      refresh: 'true',
-      testMode: true
+      endpoint: ES_ENDPOINT,
+      refresh: 'true'
     }
     await assertThrowsAsync(async () => pushStream(simpleData), 'Please provide correct value for refresh')
   })
@@ -286,9 +275,8 @@ describe('Test stream events', () => {
       type: 'asd',
       body: { test: 'test', myvalue: { 1: 'test' } },
       id: '12',
-      endpoint: `http://${ES_ENDPOINT}`,
+      endpoint: ES_ENDPOINT,
       refresh: true,
-      testMode: true,
       transformFunction: null
     }
     await assertThrowsAsync(async () => pushStream(simpleData), 'Please provide correct value for transformFunction')
@@ -297,14 +285,13 @@ describe('Test stream events', () => {
   it('Input data: should skip index if body is false', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      transformFunction: (body) => false,
-      testMode: true
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
+      transformFunction: (body) => false
     })
     const inserted = converter(insertEvent.Records[0].dynamodb.Keys).url
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${inserted}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${inserted}`)
     const body = await result.json()
     assert.isFalse(body.found)
   })
@@ -312,14 +299,13 @@ describe('Test stream events', () => {
   it('Input data: should skip index if body is empty', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
-      transformFunction: body => {},
-      testMode: true
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
+      transformFunction: body => {}
     })
     const inserted = converter(insertEvent.Records[0].dynamodb.Keys).url
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${inserted}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${inserted}`)
     const body = await result.json()
     assert.isFalse(body.found)
   })
@@ -327,20 +313,19 @@ describe('Test stream events', () => {
   it('Input data: should transform and insert based on action given oldImage', async () => {
     await pushStream({
       event: modifyEvent,
-      index: INDEX,
-      type: TYPE,
-      endpoint: `http://${ES_ENDPOINT}`,
+      index: ES_INDEX,
+      type: ES_TYPE,
+      endpoint: ES_ENDPOINT,
       transformFunction: (body, oldBody) => {
         const { city } = oldBody
         return {
           ...body,
           city
         }
-      },
-      testMode: true
+      }
     })
     const inserted = converter(modifyEvent.Records[0].dynamodb.Keys).url
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${inserted}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${inserted}`)
     const body = await result.json()
     assert.isTrue(body.found)
     const data = removeEventData(converter(modifyEvent.Records[0].dynamodb.NewImage))
@@ -354,15 +339,14 @@ describe('Test stream events', () => {
   it('INSERT: should insert new item based on elasticSearchOptions ', async () => {
     await pushStream({
       event: insertEvent,
-      index: INDEX,
-      type: TYPE,
+      index: ES_INDEX,
+      type: ES_TYPE,
       endpoint: 'tobeoverwritten',
-      testMode: true,
       transformFunction: undefined,
-      elasticSearchOptions: { node: 'http://localhost:9200' }
+      elasticSearchOptions: { node: ES_ENDPOINT }
     })
     const keys = converter(insertEvent.Records[0].dynamodb.Keys)
-    const result = await fetch(`http://${ES_ENDPOINT}/${INDEX}/${TYPE}/${keys.url}`)
+    const result = await fetch(`${ES_ENDPOINT}/${ES_INDEX}/${ES_TYPE}/${keys.url}`)
     const body = await result.json()
     assert.isTrue(body.found)
     const data = removeEventData(converter(insertEvent.Records[0].dynamodb.NewImage))
